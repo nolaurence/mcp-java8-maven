@@ -3,22 +3,16 @@
 */
 package io.modelcontextprotocol.client.transport;
 
-import io.modelcontextprotocol.util.Utils;
-import lombok.AllArgsConstructor;
 import lombok.Data;
-import lombok.NoArgsConstructor;
-import lombok.var;
-import org.apache.hc.client5.http.async.methods.AbstractCharResponseConsumer;
-import org.apache.hc.client5.http.async.methods.SimpleHttpRequest;
-import org.apache.hc.client5.http.async.methods.SimpleRequestProducer;
-import org.apache.hc.client5.http.impl.async.CloseableHttpAsyncClient;
-import org.apache.hc.core5.http.ContentType;
-import org.apache.hc.core5.http.HttpResponse;
-import org.apache.hc.core5.http.Method;
 
 import java.net.URI;
-import java.nio.CharBuffer;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Flow;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 import java.util.regex.Pattern;
 
 /**
@@ -45,7 +39,9 @@ import java.util.regex.Pattern;
  */
 public class FlowSseClient {
 
-	private final CloseableHttpAsyncClient httpClient;
+	private final HttpClient httpClient;
+
+	private final HttpRequest.Builder requestBuilder;
 
 	/**
 	 * Pattern to extract the data content from SSE data field lines. Matches lines
@@ -65,18 +61,24 @@ public class FlowSseClient {
 	 */
 	private static final Pattern EVENT_TYPE_PATTERN = Pattern.compile("^event:(.+)$", Pattern.MULTILINE);
 
-	/**
-	 * Record class representing a Server-Sent Event with its standard fields.
-	 *
-	 * @param id the event ID (may be null)
-	 * @param type the event type (defaults to "message" if not specified in the stream)
-	 * @param data the event payload data
-	 */
 	@Data
-	@AllArgsConstructor
-	@NoArgsConstructor
 	public static class SseEvent {
-		String id; String type; String data;
+		private String id;
+		private String type;
+		private String data;
+
+		/**
+		 * Record class representing a Server-Sent Event with its standard fields.
+		 *
+		 * @param id the event ID (may be null)
+		 * @param type the event type (defaults to "message" if not specified in the stream)
+		 * @param data the event payload data
+		 */
+		public SseEvent(String id, String type, String data) {
+			this.id = id;
+			this.type = type;
+			this.data = data;
+		}
 	}
 
 	/**
@@ -103,8 +105,18 @@ public class FlowSseClient {
 	 * Creates a new FlowSseClient with the specified HTTP client.
 	 * @param httpClient the {@link HttpClient} instance to use for SSE connections
 	 */
-	public FlowSseClient(CloseableHttpAsyncClient httpClient) {
+	public FlowSseClient(HttpClient httpClient) {
+		this(httpClient, HttpRequest.newBuilder());
+	}
+
+	/**
+	 * Creates a new FlowSseClient with the specified HTTP client and request builder.
+	 * @param httpClient the {@link HttpClient} instance to use for SSE connections
+	 * @param requestBuilder the {@link HttpRequest.Builder} to use for SSE requests
+	 */
+	public FlowSseClient(HttpClient httpClient, HttpRequest.Builder requestBuilder) {
 		this.httpClient = httpClient;
+		this.requestBuilder = requestBuilder;
 	}
 
 	/**
@@ -121,48 +133,28 @@ public class FlowSseClient {
 	 * @throws RuntimeException if the connection fails with a non-200 status code
 	 */
 	public void subscribe(String url, SseEventHandler eventHandler) {
-		var request = SimpleHttpRequest.create(Method.GET, URI.create(url));
-		request.setHeader("Accept", "text/event-stream");
-		request.setHeader("Cache-Control", "no-cache");
+		HttpRequest request = this.requestBuilder.uri(URI.create(url))
+				.header("Accept", "text/event-stream")
+				.header("Cache-Control", "no-cache")
+				.GET()
+				.build();
 
 		StringBuilder eventBuilder = new StringBuilder();
 		AtomicReference<String> currentEventId = new AtomicReference<>();
 		AtomicReference<String> currentEventType = new AtomicReference<>("message");
 
-//		Function<Flow.Subscriber<String>, HttpResponse.BodySubscriber<Void>> subscriberFactory = subscriber -> HttpResponse.BodySubscribers
-//			.fromLineSubscriber(subscriber);
-
-		var future = this.httpClient.execute(SimpleRequestProducer.create(request), new AbstractCharResponseConsumer<HttpResponse>() {
-			final StringBuilder builder = new StringBuilder();
-			HttpResponse httpResponse;
+		Flow.Subscriber<String> lineSubscriber = new Flow.Subscriber<>() {
+			private Flow.Subscription subscription;
 
 			@Override
-			protected void start(
-					final HttpResponse response,
-					final ContentType contentType) {
-				httpResponse = response;
+			public void onSubscribe(Flow.Subscription subscription) {
+				this.subscription = subscription;
+				subscription.request(Long.MAX_VALUE);
 			}
 
 			@Override
-			protected int capacityIncrement() {
-				return Integer.MAX_VALUE;
-			}
-
-			@Override
-			protected void data(final CharBuffer data, final boolean endOfStream) {
-				while (data.hasRemaining()) {
-					char c = data.get();
-					if (c == '\n') {
-						onLine(builder.toString());
-						builder.setLength(0);
-					} else {
-						builder.append(c);
-					}
-				}
-			}
-
-			private void onLine(String line) {
-				if (line.trim().isEmpty()) {
+			public void onNext(String line) {
+				if (line.isEmpty()) {
 					// Empty line means end of event
 					if (eventBuilder.length() > 0) {
 						String eventData = eventBuilder.toString();
@@ -170,7 +162,8 @@ public class FlowSseClient {
 						eventHandler.onEvent(event);
 						eventBuilder.setLength(0);
 					}
-				} else {
+				}
+				else {
 					if (line.startsWith("data:")) {
 						var matcher = EVENT_DATA_PATTERN.matcher(line);
 						if (matcher.find()) {
@@ -190,27 +183,33 @@ public class FlowSseClient {
 						}
 					}
 				}
+				subscription.request(1);
 			}
 
 			@Override
-			protected HttpResponse buildResult() {
-				return httpResponse;
+			public void onError(Throwable throwable) {
+				eventHandler.onError(throwable);
 			}
 
 			@Override
-			public void failed(final Exception cause) {
-				System.out.println(request + "->" + cause);
+			public void onComplete() {
+				// Handle any remaining event data
+				if (eventBuilder.length() > 0) {
+					String eventData = eventBuilder.toString();
+					SseEvent event = new SseEvent(currentEventId.get(), currentEventType.get(), eventData.trim());
+					eventHandler.onEvent(event);
+				}
 			}
+		};
 
-			@Override
-			public void releaseResources() {
-			}
+		Function<Flow.Subscriber<String>, java.net.http.HttpResponse.BodySubscriber<Void>> subscriberFactory = subscriber -> java.net.http.HttpResponse.BodySubscribers
+				.fromLineSubscriber(subscriber);
 
-		}, null);
+		CompletableFuture<HttpResponse<Void>> future = this.httpClient.sendAsync(request,
+				info -> subscriberFactory.apply(lineSubscriber));
 
-
-		Utils.toCompletableFuture(future).thenAccept(response -> {
-			int status = response.getCode();
+		future.thenAccept(response -> {
+			int status = response.statusCode();
 			if (status != 200 && status != 201 && status != 202 && status != 206) {
 				throw new RuntimeException("Failed to connect to SSE stream. Unexpected status code: " + status);
 			}

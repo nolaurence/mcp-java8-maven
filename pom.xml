@@ -6,7 +6,7 @@
 
 	<groupId>cn.nolaurence.mcp</groupId>
 	<artifactId>mcp-parent</artifactId>
-	<version>0.8.2</version>
+	<version>0.8.3</version>
 
 	<packaging>pom</packaging>
 	<url>https://github.com/modelcontextprotocol/java-sdk</url>
@@ -53,8 +53,8 @@
 	<properties>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		<project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
-		<java.version>8</java.version>
-		<maven.compiler.source>8</maven.compiler.source>
+		<java.version>11</java.version>
+		<maven.compiler.source>11</maven.compiler.source>
 		<maven.compiler.target>8</maven.compiler.target>
 
 		<assert4j.version>3.26.3</assert4j.version>
@@ -316,7 +316,7 @@
 										<arg>--pinentry-mode</arg>
 										<arg>loopback</arg>
 									</gpgArguments>
-									<passphrase>A41C6E85B87B1B8A269F0E8C022880535D0FC130</passphrase>
+									<passphrase>016E6033A9247F0BF4F052767D980E686118930D</passphrase>
 								</configuration>
 							</execution>
 						</executions>

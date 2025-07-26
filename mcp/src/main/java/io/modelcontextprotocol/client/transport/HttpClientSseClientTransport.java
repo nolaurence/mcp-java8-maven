@@ -5,10 +5,15 @@ package io.modelcontextprotocol.client.transport;
 
 import java.io.IOException;
 import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -20,18 +25,6 @@ import io.modelcontextprotocol.spec.McpSchema;
 import io.modelcontextprotocol.spec.McpSchema.JSONRPCMessage;
 import io.modelcontextprotocol.util.Assert;
 import io.modelcontextprotocol.util.Utils;
-import lombok.var;
-import org.apache.hc.client5.http.async.methods.SimpleHttpRequest;
-import org.apache.hc.client5.http.async.methods.SimpleHttpResponse;
-import org.apache.hc.client5.http.classic.methods.HttpPost;
-import org.apache.hc.client5.http.config.RequestConfig;
-import org.apache.hc.client5.http.impl.async.CloseableHttpAsyncClient;
-import org.apache.hc.client5.http.impl.async.HttpAsyncClientBuilder;
-import org.apache.hc.core5.concurrent.FutureCallback;
-import org.apache.hc.core5.http.ContentType;
-import org.apache.hc.core5.http.Method;
-import org.apache.hc.core5.http.io.entity.StringEntity;
-import org.apache.hc.core5.util.Timeout;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
@@ -74,10 +67,13 @@ public class HttpClientSseClientTransport implements McpClientTransport {
 	private static final String ENDPOINT_EVENT_TYPE = "endpoint";
 
 	/** Default SSE endpoint path */
-	private static final String SSE_ENDPOINT = "/sse";
+	private static final String DEFAULT_SSE_ENDPOINT = "/sse";
 
 	/** Base URI for the MCP server */
-	private final String baseUri;
+	private final URI baseUri;
+
+	/** SSE endpoint path */
+	private final String sseEndpoint;
 
 	/** SSE client for handling server-sent events. Uses the /sse endpoint */
 	private final FlowSseClient sseClient;
@@ -86,7 +82,10 @@ public class HttpClientSseClientTransport implements McpClientTransport {
 	 * HTTP client for sending messages to the server. Uses HTTP POST over the message
 	 * endpoint
 	 */
-	private CloseableHttpAsyncClient httpClient;
+	private final HttpClient httpClient;
+
+	/** HTTP request builder for building requests to send messages to the server */
+	private final HttpRequest.Builder requestBuilder;
 
 	/** JSON object mapper for message serialization/deserialization */
 	protected ObjectMapper objectMapper;
@@ -106,9 +105,12 @@ public class HttpClientSseClientTransport implements McpClientTransport {
 	/**
 	 * Creates a new transport instance with default HTTP client and object mapper.
 	 * @param baseUri the base URI of the MCP server
+	 * @deprecated Use {@link HttpClientSseClientTransport#builder(String)} instead. This
+	 * constructor will be removed in future versions.
 	 */
+	@Deprecated(forRemoval = true)
 	public HttpClientSseClientTransport(String baseUri) {
-		this(HttpAsyncClientBuilder.create(), baseUri, new ObjectMapper());
+		this(HttpClient.newBuilder(), baseUri, new ObjectMapper());
 	}
 
 	/**
@@ -117,18 +119,208 @@ public class HttpClientSseClientTransport implements McpClientTransport {
 	 * @param baseUri the base URI of the MCP server
 	 * @param objectMapper the object mapper for JSON serialization/deserialization
 	 * @throws IllegalArgumentException if objectMapper or clientBuilder is null
+	 * @deprecated Use {@link HttpClientSseClientTransport#builder(String)} instead. This
+	 * constructor will be removed in future versions.
 	 */
-	public HttpClientSseClientTransport(HttpAsyncClientBuilder clientBuilder, String baseUri, ObjectMapper objectMapper) {
+	@Deprecated(forRemoval = true)
+	public HttpClientSseClientTransport(HttpClient.Builder clientBuilder, String baseUri, ObjectMapper objectMapper) {
+		this(clientBuilder, baseUri, DEFAULT_SSE_ENDPOINT, objectMapper);
+	}
+
+	/**
+	 * Creates a new transport instance with custom HTTP client builder and object mapper.
+	 * @param clientBuilder the HTTP client builder to use
+	 * @param baseUri the base URI of the MCP server
+	 * @param sseEndpoint the SSE endpoint path
+	 * @param objectMapper the object mapper for JSON serialization/deserialization
+	 * @throws IllegalArgumentException if objectMapper or clientBuilder is null
+	 * @deprecated Use {@link HttpClientSseClientTransport#builder(String)} instead. This
+	 * constructor will be removed in future versions.
+	 */
+	@Deprecated(forRemoval = true)
+	public HttpClientSseClientTransport(HttpClient.Builder clientBuilder, String baseUri, String sseEndpoint,
+										ObjectMapper objectMapper) {
+		this(clientBuilder, HttpRequest.newBuilder(), baseUri, sseEndpoint, objectMapper);
+	}
+
+	/**
+	 * Creates a new transport instance with custom HTTP client builder, object mapper,
+	 * and headers.
+	 * @param clientBuilder the HTTP client builder to use
+	 * @param requestBuilder the HTTP request builder to use
+	 * @param baseUri the base URI of the MCP server
+	 * @param sseEndpoint the SSE endpoint path
+	 * @param objectMapper the object mapper for JSON serialization/deserialization
+	 * @throws IllegalArgumentException if objectMapper, clientBuilder, or headers is null
+	 * @deprecated Use {@link HttpClientSseClientTransport#builder(String)} instead. This
+	 * constructor will be removed in future versions.
+	 */
+	@Deprecated(forRemoval = true)
+	public HttpClientSseClientTransport(HttpClient.Builder clientBuilder, HttpRequest.Builder requestBuilder,
+										String baseUri, String sseEndpoint, ObjectMapper objectMapper) {
+		this(clientBuilder.connectTimeout(Duration.ofSeconds(10)).build(), requestBuilder, baseUri, sseEndpoint,
+				objectMapper);
+	}
+
+	/**
+	 * Creates a new transport instance with custom HTTP client builder, object mapper,
+	 * and headers.
+	 * @param httpClient the HTTP client to use
+	 * @param requestBuilder the HTTP request builder to use
+	 * @param baseUri the base URI of the MCP server
+	 * @param sseEndpoint the SSE endpoint path
+	 * @param objectMapper the object mapper for JSON serialization/deserialization
+	 * @throws IllegalArgumentException if objectMapper, clientBuilder, or headers is null
+	 */
+	HttpClientSseClientTransport(HttpClient httpClient, HttpRequest.Builder requestBuilder, String baseUri,
+								 String sseEndpoint, ObjectMapper objectMapper) {
 		Assert.notNull(objectMapper, "ObjectMapper must not be null");
 		Assert.hasText(baseUri, "baseUri must not be empty");
-		Assert.notNull(clientBuilder, "clientBuilder must not be null");
-		this.baseUri = baseUri;
+		Assert.hasText(sseEndpoint, "sseEndpoint must not be empty");
+		Assert.notNull(httpClient, "httpClient must not be null");
+		Assert.notNull(requestBuilder, "requestBuilder must not be null");
+		this.baseUri = URI.create(baseUri);
+		this.sseEndpoint = sseEndpoint;
 		this.objectMapper = objectMapper;
-		var globalConfig = RequestConfig.custom().setConnectTimeout(Timeout.ofSeconds(10)).build();
-		clientBuilder.setDefaultRequestConfig(globalConfig);
-		this.httpClient = clientBuilder.build();
-		this.httpClient.start();
-		this.sseClient = new FlowSseClient(this.httpClient);
+		this.httpClient = httpClient;
+		this.requestBuilder = requestBuilder;
+
+		this.sseClient = new FlowSseClient(this.httpClient, requestBuilder);
+	}
+
+	/**
+	 * Creates a new builder for {@link HttpClientSseClientTransport}.
+	 * @param baseUri the base URI of the MCP server
+	 * @return a new builder instance
+	 */
+	public static Builder builder(String baseUri) {
+		return new Builder().baseUri(baseUri);
+	}
+
+	/**
+	 * Builder for {@link HttpClientSseClientTransport}.
+	 */
+	public static class Builder {
+
+		private String baseUri;
+
+		private String sseEndpoint = DEFAULT_SSE_ENDPOINT;
+
+		private HttpClient.Builder clientBuilder = HttpClient.newBuilder()
+				.version(HttpClient.Version.HTTP_1_1)
+				.connectTimeout(Duration.ofSeconds(10));
+
+		private ObjectMapper objectMapper = new ObjectMapper();
+
+		private HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
+				.header("Content-Type", "application/json");
+
+		/**
+		 * Creates a new builder instance.
+		 */
+		Builder() {
+			// Default constructor
+		}
+
+		/**
+		 * Creates a new builder with the specified base URI.
+		 * @param baseUri the base URI of the MCP server
+		 * @deprecated Use {@link HttpClientSseClientTransport#builder(String)} instead.
+		 * This constructor is deprecated and will be removed or made {@code protected} or
+		 * {@code private} in a future release.
+		 */
+		@Deprecated(forRemoval = true)
+		public Builder(String baseUri) {
+			Assert.hasText(baseUri, "baseUri must not be empty");
+			this.baseUri = baseUri;
+		}
+
+		/**
+		 * Sets the base URI.
+		 * @param baseUri the base URI
+		 * @return this builder
+		 */
+		Builder baseUri(String baseUri) {
+			Assert.hasText(baseUri, "baseUri must not be empty");
+			this.baseUri = baseUri;
+			return this;
+		}
+
+		/**
+		 * Sets the SSE endpoint path.
+		 * @param sseEndpoint the SSE endpoint path
+		 * @return this builder
+		 */
+		public Builder sseEndpoint(String sseEndpoint) {
+			Assert.hasText(sseEndpoint, "sseEndpoint must not be empty");
+			this.sseEndpoint = sseEndpoint;
+			return this;
+		}
+
+		/**
+		 * Sets the HTTP client builder.
+		 * @param clientBuilder the HTTP client builder
+		 * @return this builder
+		 */
+		public Builder clientBuilder(HttpClient.Builder clientBuilder) {
+			Assert.notNull(clientBuilder, "clientBuilder must not be null");
+			this.clientBuilder = clientBuilder;
+			return this;
+		}
+
+		/**
+		 * Customizes the HTTP client builder.
+		 * @param clientCustomizer the consumer to customize the HTTP client builder
+		 * @return this builder
+		 */
+		public Builder customizeClient(final Consumer<HttpClient.Builder> clientCustomizer) {
+			Assert.notNull(clientCustomizer, "clientCustomizer must not be null");
+			clientCustomizer.accept(clientBuilder);
+			return this;
+		}
+
+		/**
+		 * Sets the HTTP request builder.
+		 * @param requestBuilder the HTTP request builder
+		 * @return this builder
+		 */
+		public Builder requestBuilder(HttpRequest.Builder requestBuilder) {
+			Assert.notNull(requestBuilder, "requestBuilder must not be null");
+			this.requestBuilder = requestBuilder;
+			return this;
+		}
+
+		/**
+		 * Customizes the HTTP client builder.
+		 * @param requestCustomizer the consumer to customize the HTTP request builder
+		 * @return this builder
+		 */
+		public Builder customizeRequest(final Consumer<HttpRequest.Builder> requestCustomizer) {
+			Assert.notNull(requestCustomizer, "requestCustomizer must not be null");
+			requestCustomizer.accept(requestBuilder);
+			return this;
+		}
+
+		/**
+		 * Sets the object mapper for JSON serialization/deserialization.
+		 * @param objectMapper the object mapper
+		 * @return this builder
+		 */
+		public Builder objectMapper(ObjectMapper objectMapper) {
+			Assert.notNull(objectMapper, "objectMapper must not be null");
+			this.objectMapper = objectMapper;
+			return this;
+		}
+
+		/**
+		 * Builds a new {@link HttpClientSseClientTransport} instance.
+		 * @return a new transport instance
+		 */
+		public HttpClientSseClientTransport build() {
+			return new HttpClientSseClientTransport(clientBuilder.build(), requestBuilder, baseUri, sseEndpoint,
+					objectMapper);
+		}
+
 	}
 
 	/**
@@ -149,7 +341,8 @@ public class HttpClientSseClientTransport implements McpClientTransport {
 		CompletableFuture<Void> future = new CompletableFuture<>();
 		connectionFuture.set(future);
 
-		sseClient.subscribe(this.baseUri + SSE_ENDPOINT, new FlowSseClient.SseEventHandler() {
+		URI clientUri = Utils.resolveUri(this.baseUri, this.sseEndpoint);
+		sseClient.subscribe(clientUri.toString(), new FlowSseClient.SseEventHandler() {
 			@Override
 			public void onEvent(SseEvent event) {
 				if (isClosing) {
@@ -221,24 +414,18 @@ public class HttpClientSseClientTransport implements McpClientTransport {
 
 		try {
 			String jsonText = this.objectMapper.writeValueAsString(message);
-			var request = SimpleHttpRequest.create(Method.POST, URI.create(this.baseUri + endpoint));
-			request.setBody(jsonText, ContentType.APPLICATION_JSON);
+			URI requestUri = Utils.resolveUri(baseUri, endpoint);
+			HttpRequest request = this.requestBuilder.uri(requestUri)
+					.POST(HttpRequest.BodyPublishers.ofString(jsonText))
+					.build();
 
-			var future = httpClient.execute(request, new FutureCallback<SimpleHttpResponse>() {
-				@Override
-				public void completed(SimpleHttpResponse response) {
-				}
-
-				@Override
-				public void failed(Exception ex) {
-					logger.error("Error sending message: {}", ex.getMessage());
-				}
-
-				@Override
-				public void cancelled() {
-				}
-			});
-			return Mono.fromFuture(Utils.toCompletableFutureDiscard(future));
+			return Mono.fromFuture(
+					httpClient.sendAsync(request, HttpResponse.BodyHandlers.discarding()).thenAccept(response -> {
+						if (response.statusCode() != 200 && response.statusCode() != 201 && response.statusCode() != 202
+								&& response.statusCode() != 206) {
+							logger.error("Error sending message: {}", response.statusCode());
+						}
+					}));
 		}
 		catch (IOException e) {
 			if (!isClosing) {
@@ -258,25 +445,17 @@ public class HttpClientSseClientTransport implements McpClientTransport {
 	 */
 	@Override
 	public Mono<Void> closeGracefully() {
-	    return Mono.fromRunnable(() -> {
-		isClosing = true;
-		CompletableFuture<Void> future = connectionFuture.get();
-		if (future != null && !future.isDone()) {
-		    future.cancel(true);
-		}
-		try {
-		    // Properly close the HTTP client to release resources
-		    if (httpClient != null) {
-			httpClient.close();
-		    }
-		} catch (IOException e) {
-		    logger.error("Error closing HttpClient", e);
-		}
-	    });
+		return Mono.fromRunnable(() -> {
+			isClosing = true;
+			CompletableFuture<Void> future = connectionFuture.get();
+			if (future != null && !future.isDone()) {
+				future.cancel(true);
+			}
+		});
 	}
 
 	/**
-	 * Unmarshals data to the specified type using the configured object mapper.
+	 * Unmarshal data to the specified type using the configured object mapper.
 	 * @param data the data to unmarshal
 	 * @param typeRef the type reference for the target type
 	 * @param <T> the target type
