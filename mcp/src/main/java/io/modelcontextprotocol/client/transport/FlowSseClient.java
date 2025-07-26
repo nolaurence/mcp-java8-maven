@@ -4,6 +4,7 @@
 package io.modelcontextprotocol.client.transport;
 
 import lombok.Data;
+import lombok.var;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -143,7 +144,7 @@ public class FlowSseClient {
 		AtomicReference<String> currentEventId = new AtomicReference<>();
 		AtomicReference<String> currentEventType = new AtomicReference<>("message");
 
-		Flow.Subscriber<String> lineSubscriber = new Flow.Subscriber<>() {
+		Flow.Subscriber<String> lineSubscriber = new Flow.Subscriber<String>() {
 			private Flow.Subscription subscription;
 
 			@Override
@@ -202,8 +203,7 @@ public class FlowSseClient {
 			}
 		};
 
-		Function<Flow.Subscriber<String>, java.net.http.HttpResponse.BodySubscriber<Void>> subscriberFactory = subscriber -> java.net.http.HttpResponse.BodySubscribers
-				.fromLineSubscriber(subscriber);
+		Function<Flow.Subscriber<String>, java.net.http.HttpResponse.BodySubscriber<Void>> subscriberFactory = HttpResponse.BodySubscribers::fromLineSubscriber;
 
 		CompletableFuture<HttpResponse<Void>> future = this.httpClient.sendAsync(request,
 				info -> subscriberFactory.apply(lineSubscriber));

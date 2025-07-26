@@ -14,6 +14,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import io.modelcontextprotocol.util.Assert;
 import lombok.AllArgsConstructor;
 import lombok.Data;
+import lombok.var;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.Disposable;
@@ -45,7 +46,7 @@ public class McpClientSession implements McpSession {
 	private final Duration requestTimeout;
 
 	/** Transport layer implementation for message exchange */
-	private final McpClientTransport transport;
+	private final McpTransport transport;
 
 	/** Map of pending responses keyed by request ID */
 	private final ConcurrentHashMap<Object, MonoSink<McpSchema.JSONRPCResponse>> pendingResponses = new ConcurrentHashMap<>();
