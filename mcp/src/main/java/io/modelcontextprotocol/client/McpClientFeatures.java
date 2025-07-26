@@ -12,7 +12,6 @@ import java.util.function.Function;
 import io.modelcontextprotocol.spec.McpSchema;
 import io.modelcontextprotocol.util.Assert;
 import io.modelcontextprotocol.util.Utils;
-import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.Setter;
 import reactor.core.publisher.Mono;
@@ -51,6 +50,15 @@ class McpClientFeatures {
 	/**
 	 * Asynchronous client features specification providing the capabilities and request
 	 * and notification handlers.
+	 *
+	 * clientInfo the client implementation information.
+	 * clientCapabilities the client capabilities.
+	 * roots the roots.
+	 * toolsChangeConsumers the tools change consumers.
+	 * resourcesChangeConsumers the resources change consumers.
+	 * promptsChangeConsumers the prompts change consumers.
+	 * loggingConsumers the logging consumers.
+	 * samplingHandler the sampling handler.
 	 */
 	@Getter
 	@Setter
@@ -142,12 +150,23 @@ class McpClientFeatures {
 	/**
 	 * Synchronous client features specification providing the capabilities and request
 	 * and notification handlers.
+	 *
+	 * clientInfo the client implementation information.
+	 * clientCapabilities the client capabilities.
+	 * roots the roots.
+	 * toolsChangeConsumers the tools change consumers.
+	 * resourcesChangeConsumers the resources change consumers.
+	 * promptsChangeConsumers the prompts change consumers.
+	 * loggingConsumers the logging consumers.
+	 * samplingHandler the sampling handler.
 	 */
-	@Getter
 	@Setter
+	@Getter
 	public static class Sync {
-		McpSchema.Implementation clientInfo; McpSchema.ClientCapabilities clientCapabilities;
-		Map<String, McpSchema.Root> roots; List<Consumer<List<McpSchema.Tool>>> toolsChangeConsumers;
+		McpSchema.Implementation clientInfo;
+		McpSchema.ClientCapabilities clientCapabilities;
+		Map<String, McpSchema.Root> roots;
+		List<Consumer<List<McpSchema.Tool>>> toolsChangeConsumers;
 		List<Consumer<List<McpSchema.Resource>>> resourcesChangeConsumers;
 		List<Consumer<List<McpSchema.Prompt>>> promptsChangeConsumers;
 		List<Consumer<McpSchema.LoggingMessageNotification>> loggingConsumers;

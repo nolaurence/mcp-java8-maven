@@ -78,6 +78,7 @@ public final class McpSchema {
 	public static final String METHOD_PROMPT_GET = "prompts/get";
 
 	public static final String METHOD_NOTIFICATION_PROMPTS_LIST_CHANGED = "notifications/prompts/list_changed";
+	public static final String METHOD_COMPLETION_COMPLETE = "completion/complete";
 
 	// Logging Methods
 	public static final String METHOD_LOGGING_SET_LEVEL = "logging/setLevel";
